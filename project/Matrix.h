@@ -18,6 +18,7 @@ public:
 
     Matrix transpose() const;
 
+
 private:
     std::vector<double> data_;
     size_t numRows_;
@@ -31,6 +32,11 @@ Matrix operator-(const Matrix& a, const Matrix& b);
 Matrix operator*(const Matrix& a, const Matrix& b);
 Matrix operator*(const Matrix& a, double scalar);
 Matrix operator*(double scalar,const Matrix& a);
+
+Matrix computeCovariance(const Matrix& returns);
+Matrix make_identity(size_t N);
+
+
 
 
 
