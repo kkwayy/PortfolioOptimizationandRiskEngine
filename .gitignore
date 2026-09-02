@@ -1,0 +1,19 @@
+# Build output
+cmake-build-debug/
+build/
+*.exe
+*.o
+*.obj
+
+# IDE
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Learning scratchpad (not part of the engine)
+cppPrimerLearning/
+
+# Generated data (reproducible by running the engine)
+project/frontier.csv

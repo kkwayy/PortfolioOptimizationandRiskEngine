@@ -4,6 +4,7 @@
 
 #include "Matrix.h"
 #include <cassert>
+#include <cmath>
 
 void luDecompose(const Matrix& A, Matrix& L, Matrix& U) {
     // Assume A is square (n × n). L starts as identity, U starts as a copy of A.
@@ -188,4 +189,67 @@ std::vector<double> targetReturnWeights(
     }
 
     return w;
+}
+double portfolioVariance(const std::vector<double>& w, const Matrix& Sigma) {
+    assert(Sigma.numCols() == Sigma.numRows());
+    double variance = 0.0;
+    for (size_t i = 0; i < Sigma.numRows(); i++) {
+        for (size_t j = 0; j < Sigma.numCols(); j++) {
+            variance += w[i] * Sigma(i, j) * w[j];   // w[i], not w(i,0)
+        }
+    }
+    return variance;
+}
+
+double portfolioVarianceMatmul(const std::vector<double>& w, const Matrix& Sigma) {
+    size_t N = w.size();
+    Matrix wCol(N, 1, 0.0);
+    for (size_t i = 0; i < N; i++) wCol(i, 0) = w[i];
+    Matrix quad = wCol.transpose() * (Sigma * wCol);   // (1xN)(NxN)(Nx1) -> 1x1
+    assert(quad.numRows() == 1 && quad.numCols() == 1);
+    return quad(0, 0);
+}
+void testPortfolioVariance(const Matrix& returns) {
+    Matrix Sigma = computeCovariance(returns);
+
+    // CHECK 1 — same number, two independent routes.
+    // Use GMV's weights as the test input (any valid w works, but reusing
+    // GMV means this input does double duty for Check 2).
+    std::vector<double> w = gmvWeights(returns);
+
+    double vLoop   = portfolioVariance(w, Sigma);        // your double-loop
+    double vMatmul = portfolioVarianceMatmul(w, Sigma);  // the matmul route
+
+    std::cout << "Check 1 (double-loop):  " << vLoop   << "\n";
+    std::cout << "Check 1 (matmul):       " << vMatmul << "\n";
+    // Floating point: never test doubles with ==. Compare within a tolerance.
+    assert(std::abs(vLoop - vMatmul) < 1e-9);
+    std::cout << "  -> routes agree.\n";
+
+    // CHECK 2 — the GMV tie-back (the frontier's ground-truth anchor).
+    // sqrt of GMV's variance = the x-coordinate the frontier's LEFTMOST
+    // point must land on when you plot it later. Write this number down.
+    double gmvSigma = std::sqrt(vLoop);
+    std::cout << "Check 2 (GMV sigma):    " << gmvSigma << "\n";
+    std::cout << "  -> the frontier's left tip must equal this.\n";
+}
+
+std::vector<std::pair<double,double>> efficientFrontier(
+    const Matrix& returns, double Rmin, double Rmax, size_t steps) {
+    Matrix Sigma = computeCovariance(returns);
+
+    std::vector<std::pair<double,double>> pairs;
+
+    for (size_t i =0 ; i<steps; i++) {
+        double step_size=(Rmax - Rmin) / (steps - 1);
+
+        double target_return = Rmin + (i* step_size);
+        std::vector<double> wt=targetReturnWeights(returns, (target_return));
+
+        double sigma = std::sqrt(portfolioVariance(wt, Sigma));
+
+        pairs.push_back({sigma, target_return});
+
+    }
+    return pairs;
 }
