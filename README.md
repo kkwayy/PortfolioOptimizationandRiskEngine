@@ -76,7 +76,7 @@ Optimal weights w
 | **Linear solver** — LU decomposition + forward/backward substitution | ✅ Complete |
 | **Global Minimum Variance solver** | ✅ Complete |
 | **Target-return (mean-variance) solver** | ✅ Complete |
-| **Efficient frontier** | 🔨 In progress |
+| **Efficient frontier** | ✅ Complete |
 | **Covariance shrinkage** (robustness for noisy data) | 📋 Planned |
 | **Monte Carlo Value-at-Risk** (Cholesky + simulation) | 📋 Planned |
 
