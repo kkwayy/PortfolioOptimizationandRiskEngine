@@ -1,136 +1,89 @@
 # Portfolio Optimization & Risk Engine
 
-A mean-variance portfolio optimization engine written from scratch in modern C++ — a custom linear-algebra core, a market-data pipeline, and Markowitz optimizers derived from first principles. It takes historical price data and computes the portfolio allocation that minimises risk, either outright or for a chosen target return.
+A mean-variance portfolio optimizer written from scratch in modern C++ — **including its own linear-algebra core, with no third-party numerical libraries**. Given a history of asset prices, it computes optimal portfolios (global-minimum-variance and target-return) and traces the efficient frontier.
 
-The linear algebra is implemented from the ground up rather than pulled from a library, so every layer — from element access to matrix multiplication to the LU solver and the optimizers built on top — is transparent and self-contained.
+![Efficient frontier for a five-asset portfolio](project/frontier.png)
 
-> **Status:** the core engine is complete and validated on real US equity data. The optimizers (global-minimum-variance and target-return) work end to end; risk-analysis extensions (efficient frontier, covariance shrinkage, Monte Carlo VaR) are in progress. See [Roadmap](#roadmap).
-
----
-
-## Motivation
-
-Classical portfolio optimization (Markowitz mean-variance) tells you how to split capital across assets to get the best trade-off between expected return and risk. It's a clean, well-understood method — but it rests on assumptions (clean, reliable return data; well-estimated covariances) that hold far better in deep, liquid markets than in the sparse, noisy data typical of emerging markets.
-
-This engine is built with that gap in mind: a correct, transparent implementation validated on liquid US-equity data, and extensible toward the robustness techniques (covariance shrinkage, simulation-based risk) that matter most when data is imperfect.
-
----
+*Efficient frontier for a five-asset portfolio (AAPL, JPM, XOM, PG, JNJ), computed by the engine. The red marker is the global-minimum-variance (GMV) portfolio, sitting at the frontier's left tip as theory requires. Axes are in daily terms.*
 
 ## What it does
 
-Given a CSV of historical prices for a set of assets, the engine:
+- **Data pipeline** — loads a price CSV, computes daily simple returns, and estimates the sample covariance matrix Σ.
+- **Linear-algebra core** — a `Matrix` class over a flat `std::vector<double>`, plus LU decomposition with forward/backward substitution to solve linear systems and invert matrices. No BLAS, no Eigen, no NumPy — every routine is hand-written and tested against hand-computed oracles.
+- **Global Minimum Variance (GMV) optimizer** — solves for the lowest-risk portfolio, `w = Σ⁻¹1 / (1ᵀΣ⁻¹1)`, derived from Markowitz theory with a Lagrange multiplier.
+- **Target-return optimizer** — the two-constraint mean-variance problem (budget + target return), solved as a 2×2 Lagrangian system.
+- **Efficient frontier** — sweeps the target-return solver across a range of targets and emits the (risk, return) curve, exported to CSV and plotted in Python.
 
-1. Loads the prices and computes periodic returns.
-2. Estimates the asset covariance matrix Σ (the core object capturing how assets move together).
-3. Solves for optimal portfolio weights via one of two optimizers:
-   - **Global Minimum Variance (GMV):** the lowest-risk portfolio achievable from the given assets.
-   - **Target-return (mean-variance):** the lowest-risk portfolio that achieves a specified expected return.
+## How it works
 
-Both reduce to solving a linear system involving Σ, which the engine does via its own LU decomposition — no matrix inverse is ever formed.
+The optimizers reduce to solving linear systems `Ax = b`, which the engine does via its own LU decomposition rather than a library call. Portfolio risk is the quadratic form `σ = √(wᵀΣw)`. The frontier is the locus of minimum-variance portfolios over all target returns; its left tip is the GMV portfolio, which serves as a built-in correctness check (see **Validation**).
 
----
+The split is deliberate: **C++ computes, Python visualizes.** The engine writes `frontier.csv`; a small matplotlib script renders the chart.
 
-## Design goals
+## Build & run
 
-- **From-scratch linear algebra** — a `Matrix` type with its own arithmetic, transpose, and an LU-based linear solver, rather than a third-party library. The point is to understand and control every layer.
-- **Solve, don't invert** — the optimizers need `Σ⁻¹` applied to a vector, which is a linear system `Σx = b`, solved by LU decomposition (cheaper and more numerically stable than forming a full inverse).
-- **Value semantics done right** — the `Matrix` follows the Rule of Zero: it delegates memory management to `std::vector`, so copies are independent and moves are cheap, with no hand-written resource management.
-- **Clean separation of concerns** — linear-algebra core, data pipeline, and optimizers are independent components with narrow interfaces.
-- **Correctness first** — bounds-checked access in development builds, dimension checks on every operation, and numerical routines tested against hand-computed oracles.
+Requires a C++20 compiler and CMake. The project was developed with CLion + Ninja on Windows, but builds with any standard toolchain.
 
----
+```bash
+# configure and build
+cmake -S . -B build
+cmake --build build
 
-## Architecture
+# run the demo (prints GMV + target-return portfolios, writes frontier.csv)
+./build/engine
 
-```
-CSV (prices)
-     │  DataLoader: loadCSV → buildMatrix
-     ▼
-Matrix (prices)          time × assets
-     │  computeReturns
-     ▼
-Matrix (returns)         (time−1) × assets
-     │  computeCovariance
-     ▼
-Covariance matrix Σ      assets × assets
-     │  gmvWeights / targetReturnWeights   (solve Σx = b via LU)
-     ▼
-Optimal weights w
+# run the verification suite
+./build/tests
+
+# plot the frontier (Python: pandas + matplotlib)
+python plot_frontier.py
 ```
 
-**Components**
+Two executables are produced: **`engine`** (the demo) and **`tests`** (the verification harness). Each has its own `main`, so they are separate CMake targets sharing the same source files.
 
-- **`Matrix`** — a dense matrix backed by a flat `std::vector<double>`, with `(i, j)` element access, arithmetic operators, transpose, and streaming output.
-- **`DataLoader`** — reads a price CSV (`time × assets`) into a `Matrix`; computes period returns; estimates the covariance matrix.
-- **`LinearAlgebra`** — LU decomposition, forward/backward substitution, and a `solve(A, b)` routine; the GMV and target-return optimizers.
+### Regenerating the price data
 
----
+`prices.csv` is included so the engine runs out of the box. To pull fresh data:
 
-## Roadmap
-
-| Component | Status |
-|---|---|
-| **Matrix core** — element access, `+ − ×` (matrix & scalar), transpose, stream output | ✅ Complete |
-| **Data pipeline** — CSV loader, price→returns, matrix bridge | ✅ Complete |
-| **Covariance estimation** — sample covariance from the returns matrix | ✅ Complete |
-| **Linear solver** — LU decomposition + forward/backward substitution | ✅ Complete |
-| **Global Minimum Variance solver** | ✅ Complete |
-| **Target-return (mean-variance) solver** | ✅ Complete |
-| **Efficient frontier** | 🔨 In progress |
-| **Covariance shrinkage** (robustness for noisy data) | 📋 Planned |
-| **Monte Carlo Value-at-Risk** (Cholesky + simulation) | 📋 Planned |
-
----
-
-## The math
-
-- **Expected portfolio return:** `wᵀμ` — weights `w`, expected asset returns `μ`.
-- **Portfolio variance (risk):** `wᵀΣw` — where `Σ` is the asset covariance matrix.
-- **Global Minimum Variance:** minimise `wᵀΣw` subject to weights summing to 1, giving the closed form `w = Σ⁻¹1 / (1ᵀΣ⁻¹1)`.
-- **Target-return portfolio:** minimise `wᵀΣw` subject to weights summing to 1 *and* `wᵀμ = R*`, solved via Lagrange multipliers as a 2×2 system in the multipliers.
-- Both closed forms are derived from first principles and reduce to solving `Σx = b`, handled by the LU solver.
-
----
+```bash
+pip install yfinance pandas matplotlib
+python pull_prices.py
+```
 
 ## Validation
 
-Validated on real US equity data (a diversified basket of large-cap stocks across sectors, pulled via `yfinance`):
+Numerical code is only as trustworthy as its tests. `tests.cpp` checks every component against a hand-computed oracle or a theoretical invariant:
 
-- GMV weights sum to 1 and are economically sensible — the optimizer tilts toward the lowest-volatility names, exactly as minimum-variance theory predicts.
-- Target-return weights satisfy both constraints simultaneously (sum to 1 *and* achieve the specified return).
-- The two optimizers cross-validate: feeding the GMV portfolio's own return as the target to the target-return solver reproduces the GMV weights exactly — independent confirmation that both are correct.
+- **LU solver** reproduces a hand-solved 3×3 system exactly.
+- **Covariance matrix** is symmetric with a strictly positive diagonal.
+- **Portfolio variance** agrees across two independent implementations (an explicit double sum and a matrix-multiply route) to within `1e-9`.
+- **GMV and target-return portfolios** satisfy their constraints (weights sum to 1; target return achieved).
+- **GMV is the global minimum** — no portfolio on the frontier has lower variance, and the frontier's minimum-variance point reproduces the GMV portfolio to four significant figures.
 
----
+Every value comparison uses a tolerance, never floating-point `==`.
 
-## Building & running
-
-Requires a C++20 compiler and CMake.
-
-```bash
-cmake -B build
-cmake --build build --target engine
-./build/engine
-```
-
-The engine reads a price CSV in `time × assets` layout — a header row, a date column, then one column of closing prices per asset:
+## Project structure
 
 ```
-Date,AAPL,JPM,XOM,PG,JNJ
-2023-01-03,123.6,132.1,104.8,148.2,171.5
-2023-01-04,125.1,133.0,106.2,147.9,172.0
+project/
+├── Matrix.h / Matrix.cpp             # Matrix class + operators
+├── DataLoader.h / DataLoader.cpp     # CSV loading, returns, covariance
+├── LinearAlgebra.h / LinearAlgebra.cpp # LU solve, GMV, target-return, frontier
+├── main.cpp                          # demo entry point (`engine` target)
+├── tests.cpp                         # verification harness (`tests` target)
+├── prices.csv                        # sample price history
+├── pull_prices.py                    # data sourcing (yfinance)
+├── plot_frontier.py                  # frontier chart (matplotlib)
+└── frontier.png                      # rendered efficient frontier
 ```
 
-Clean multi-ticker CSVs are assembled offline in Python (`pull_prices.py`, using `yfinance`); the engine consumes the finished file. This keeps data-wrangling in the tool built for it and the numerical core in C++.
+## Roadmap
 
----
+The engine is complete as a mean-variance optimizer through the efficient frontier. Planned extensions, not yet implemented:
 
-## Tech
+- **Covariance shrinkage** (Ledoit–Wolf) — stabilizes the covariance estimate on noisy, short-history data, where classical Markowitz weights are notoriously unstable. Particularly relevant to sparse emerging-market data.
+- **Monte Carlo Value at Risk** — Cholesky-factored correlated return simulation to estimate portfolio VaR at a chosen confidence level.
 
-- **C++20** — value semantics, RAII, operator overloading, move semantics.
-- **CMake** build.
-- **Python** (`yfinance`) for offline data assembly only.
-- No third-party numerical dependencies — the linear algebra is implemented in-repo.
+## Notes
 
----
-
-*This project is under active development; the risk-analysis extensions are being added through the current term.*
+The mathematics (Lagrangian derivations, the covariance quadratic form, LU decomposition) was worked through from first principles alongside the implementation. This is a learning project built to be correct and legible rather than fast, and to serve as a foundation for the extensions above.

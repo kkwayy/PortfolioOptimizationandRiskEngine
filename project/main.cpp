@@ -2,87 +2,86 @@
 #include "DataLoader.h"
 #include "LinearAlgebra.h"
 #include <iostream>
-#include <cmath>
 #include <fstream>
+#include <vector>
+#include <string>
+#include <cmath>
+
+// Portfolio Optimization & Risk Engine — demo entry point.
+//
+// Loads a price CSV, computes returns and the covariance matrix, then:
+//   1. solves the global-minimum-variance (GMV) portfolio,
+//   2. solves a target-return portfolio,
+//   3. sweeps the efficient frontier and writes it to frontier.csv.
+//
+// Verification/oracle tests live in tests.cpp (the separate `tests` target).
 
 int main() {
-    auto data = loadCSV("prices.csv");
-    Matrix prices = buildMatrix(data);
-    Matrix returns = computeReturns(prices);
+    // --- load data ---
+    auto data      = loadCSV("prices.csv");
+    Matrix prices  = buildMatrix(data);
+    Matrix returns = computeReturns(prices);      // (T-1) x N : daily simple returns
+    Matrix Sigma   = computeCovariance(returns);  // N x N covariance matrix
 
-    size_t N = returns.numCols(), T = returns.numRows();
+    const size_t N = returns.numCols();
+    const size_t T = returns.numRows();
 
-    // Sigma is the covariance matrix (N x N, square). Compute it ONCE up front
-    // and reuse it — every risk calculation below needs Sigma, never `returns`.
-    Matrix Sigma = computeCovariance(returns);   // # THE FIX: variance needs Sigma, not returns
+    // Column order MUST match prices.csv. Edit if you change the asset set.
+    std::vector<std::string> assets = {"AAPL", "JPM", "XOM", "PG", "JNJ"};
 
-    // --- means (needed for the return checks) ---
+    // --- per-asset mean (daily) returns, for reporting achieved returns ---
     std::vector<double> mu(N, 0.0);
-    for (size_t j = 0; j < N; j++) {
-        double colSum = 0.0;
-        for (size_t t = 0; t < T; t++) colSum += returns(t, j);
-        mu[j] = colSum / T;
+    for (size_t j = 0; j < N; ++j) {
+        double s = 0.0;
+        for (size_t t = 0; t < T; ++t) s += returns(t, j);
+        mu[j] = s / T;
     }
-    std::cout << "Per-asset mean returns (mu): ";
-    for (size_t j = 0; j < N; j++) std::cout << mu[j] << ' ';
-    std::cout << '\n';
 
-    std::vector<double> wgmv = gmvWeights(returns);
-    std::cout << "GMV weights: ";
-    double sGmv = 0.0;
-    for (double wi : wgmv) { std::cout << wi << ' '; sGmv += wi; }
-    std::cout << " | sum = " << sGmv << '\n';
+    std::cout.setf(std::ios::fixed);
+    std::cout.precision(6);
 
-    // --- Test 1: target-return on real data ---
-    double target = 0.0005;
-    std::vector<double> wt = targetReturnWeights(returns, target);
-    double sumT = 0.0, retT = 0.0;
-    for (size_t i = 0; i < N; i++) { sumT += wt[i]; retT += mu[i] * wt[i]; }
-    std::cout << "\nTarget-return: sum = " << sumT
-              << " | achieved = " << retT << " (target " << target << ")\n";
+    // --- 1. Global Minimum Variance portfolio ---
+    std::vector<double> wGmv = gmvWeights(returns);
+    double gmvRet = 0.0, gmvSum = 0.0;
+    for (size_t i = 0; i < N; ++i) { gmvRet += mu[i] * wGmv[i]; gmvSum += wGmv[i]; }
+    double gmvSigma = std::sqrt(portfolioVariance(wGmv, Sigma));
 
-    // --- Test 2: cross-check (GMV return as target should reproduce GMV) ---
-    double gmvReturn = 0.0;
-    for (size_t i = 0; i < N; i++) gmvReturn += mu[i] * wgmv[i];
-    std::vector<double> wcross = targetReturnWeights(returns, gmvReturn);
-    std::cout << "Cross-check (target = GMV return " << gmvReturn << "):\n";
-    std::cout << "  GMV weights:  ";
-    for (double x : wgmv) std::cout << x << ' ';
-    std::cout << "\n  target-ret w: ";
-    for (double x : wcross) std::cout << x << ' ';
-    std::cout << '\n';
+    std::cout << "=== Global Minimum Variance portfolio ===\n";
+    for (size_t i = 0; i < N; ++i)
+        std::cout << "  " << assets[i] << ": " << wGmv[i] << "\n";
+    std::cout << "  weights sum : " << gmvSum   << "\n";
+    std::cout << "  exp. return : " << gmvRet   << "\n";
+    std::cout << "  risk (sigma): " << gmvSigma << "\n\n";
 
-    // --- portfolio variance / volatility of the target-return portfolio ---
-    double variance = portfolioVariance(wt, Sigma);   // # THE FIX: pass Sigma, not returns
-    std::cout << "\ntarget-ret variance = " << variance
-              << " | sigma = " << std::sqrt(variance) << '\n';
+    // --- 2. Target-return portfolio ---
+    const double target = 0.0008;   // daily; must lie within the assets' return range
+    std::vector<double> wTgt = targetReturnWeights(returns, target);
+    double tgtRet = 0.0, tgtSum = 0.0;
+    for (size_t i = 0; i < N; ++i) { tgtRet += mu[i] * wTgt[i]; tgtSum += wTgt[i]; }
+    double tgtSigma = std::sqrt(portfolioVariance(wTgt, Sigma));
 
-    // --- run the verification harness (Check 1: routes agree, Check 2: GMV sigma) ---
-    testPortfolioVariance(returns);
+    std::cout << "=== Target-return portfolio (target = " << target << ") ===\n";
+    for (size_t i = 0; i < N; ++i)
+        std::cout << "  " << assets[i] << ": " << wTgt[i] << "\n";
+    std::cout << "  weights sum : " << tgtSum   << "\n";
+    std::cout << "  exp. return : " << tgtRet   << " (target " << target << ")\n";
+    std::cout << "  risk (sigma): " << tgtSigma << "\n\n";
 
-    double Rmin = 0.0;       // a bit below GMV's 0.000356 — shows the lower (dominated) branch
-    double Rmax = 0.0017;    // just under AAPL's 0.00183 — the efficient branch runs up to here
-    size_t steps = 50;
+    // --- 3. Efficient frontier -> CSV ---
+    const double Rmin = 0.0, Rmax = 0.0017;   // straddles the GMV return
+    const size_t steps = 50;
+    auto frontier = efficientFrontier(returns, Rmin, Rmax, steps);
 
-
-    auto frontier = efficientFrontier(returns, 0.0, 0.0017, 50);
-    std::cout << "\nsigma,return\n";
-    for (auto& p : frontier)
-        std::cout << p.first << ',' << p.second << '\n';
-
-
-
-    // ... after you compute `frontier`:
     std::ofstream out("frontier.csv");
     out << "sigma,return\n";
-    for (auto& p : frontier)
-        out << p.first << ',' << p.second << '\n';
+    out.setf(std::ios::fixed);
+    out.precision(10);
+    for (const auto& p : frontier)
+        out << p.first << "," << p.second << "\n";
     out.close();
-    std::cout << "wrote frontier.csv (" << frontier.size() << " points)\n";
 
-
+    std::cout << "Wrote frontier.csv (" << frontier.size()
+              << " points). Plot with:  python plot_frontier.py\n";
 
     return 0;
-
-
 }
